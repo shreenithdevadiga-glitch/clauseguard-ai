@@ -1,12 +1,20 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { SAMPLE_CONTRACTS } from "@/lib/samples";
 import { ContractAnalysis, ClauseFinding } from "@/lib/types";
 import { SafetyGauge } from "./SafetyGauge";
 import { AnnotatedContract, UploadedFileMeta } from "./AnnotatedContract";
-import { PromptInspectorModal } from "./PromptInspectorModal";
-import { CommandPalette } from "./CommandPalette";
+
+const PromptInspectorModal = dynamic(
+  () => import("./PromptInspectorModal").then((m) => m.PromptInspectorModal),
+  { ssr: false }
+);
+const CommandPalette = dynamic(
+  () => import("./CommandPalette").then((m) => m.CommandPalette),
+  { ssr: false }
+);
 import {
   AlertTriangle,
   Check,
@@ -321,6 +329,12 @@ export function ClauseGuardApp() {
 
   return (
     <div className="min-h-screen flex flex-col bg-grid-spotlight text-slate-100">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-lg focus:bg-amber-400 focus:text-slate-950 focus:font-semibold focus:text-xs"
+      >
+        Skip to main content
+      </a>
       {/* Top Glass Header */}
       <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050811]/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -412,6 +426,7 @@ export function ClauseGuardApp() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="AIza..."
+                aria-label="Optional Gemini API Key"
                 className="flex-1 min-w-[220px] max-w-sm px-3 py-1 rounded-lg bg-slate-950 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
               />
               <button
@@ -503,7 +518,7 @@ export function ClauseGuardApp() {
 
         {/* Live 3-Stage Pipeline Progress */}
         {isAnalyzing && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3" aria-live="polite">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {[
                 { id: 1, label: "1. Clause Extractor & Taxonomist" },
@@ -535,7 +550,7 @@ export function ClauseGuardApp() {
         )}
 
         {errorMsg && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3" role="alert">
             <div className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               <span>{errorMsg}</span>
@@ -545,7 +560,7 @@ export function ClauseGuardApp() {
       </section>
 
       {/* Main Split-Pane Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
+      <main id="main-content" className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left Pane: Contract X-Ray */}
         <div className="lg:col-span-5 h-[520px] lg:h-[calc(100vh-215px)] min-h-[460px]">
           <AnnotatedContract
@@ -609,11 +624,13 @@ export function ClauseGuardApp() {
               </div>
 
               {/* Tabs */}
-              <div className="flex items-center gap-1.5 border-b border-white/10 pb-2">
+              <div className="flex items-center gap-1.5 border-b border-white/10 pb-2" role="tablist" aria-label="Audit views">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={rightTab === "audit"}
                   onClick={() => setRightTab("audit")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
                     rightTab === "audit"
                       ? "bg-amber-500/20 text-amber-300 border border-amber-400/40"
                       : "text-slate-400 hover:text-white hover:bg-white/5"
@@ -623,8 +640,10 @@ export function ClauseGuardApp() {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={rightTab === "negotiate"}
                   onClick={() => setRightTab("negotiate")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                     rightTab === "negotiate"
                       ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/40"
                       : "text-slate-400 hover:text-white hover:bg-white/5"
@@ -634,14 +653,16 @@ export function ClauseGuardApp() {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={rightTab === "qa"}
                   onClick={() => setRightTab("qa")}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
                     rightTab === "qa"
                       ? "bg-indigo-500/20 text-indigo-300 border border-indigo-400/40"
                       : "text-slate-400 hover:text-white hover:bg-white/5"
                   }`}
                 >
-                  <MessageSquare className="w-3.5 h-3.5" />
+                  <MessageSquare className="w-3.5 h-3.5" aria-hidden="true" />
                   Ask ClauseGuard
                 </button>
               </div>
@@ -844,6 +865,7 @@ export function ClauseGuardApp() {
                       value={qaQuestion}
                       onChange={(e) => setQaQuestion(e.target.value)}
                       placeholder="Ask anything about this contract..."
+                      aria-label="Ask a question about this contract"
                       className="flex-1 px-3 py-2 rounded-xl bg-black/40 border border-white/15 text-xs text-white focus:outline-none focus:border-indigo-400"
                     />
                     <button

@@ -274,13 +274,19 @@ export function AnnotatedContract({
           })}
         </div>
       ) : (
-        <textarea
-          value={text}
-          onChange={(e) => onChangeText(e.target.value)}
-          placeholder="Paste any contract text, or drag & drop PDF, Word (.docx), CSV, Photo, Video, or Audio here..."
-          className="flex-1 w-full p-4 bg-transparent resize-none focus:outline-none font-mono text-[13px] leading-relaxed text-slate-200 placeholder:text-slate-500"
-          spellCheck={false}
-        />
+        <>
+          <label htmlFor="contract-textarea" className="sr-only">
+            Contract document text
+          </label>
+          <textarea
+            id="contract-textarea"
+            value={text}
+            onChange={(e) => onChangeText(e.target.value)}
+            placeholder="Paste any contract text, or drag & drop PDF, Word (.docx), CSV, Photo, Video, or Audio here..."
+            className="flex-1 w-full p-4 bg-transparent resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60 font-mono text-[13px] leading-relaxed text-slate-200 placeholder:text-slate-500"
+            spellCheck={false}
+          />
+        </>
       )}
     </div>
   );

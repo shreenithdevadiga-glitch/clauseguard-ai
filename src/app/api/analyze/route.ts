@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import mammoth from "mammoth";
 import { UNIFIED_AUDIT_SYSTEM_PROMPT } from "@/lib/prompts";
 import { ContractAnalysis } from "@/lib/types";
+import { buildContractCacheKey, getCachedAudit, setCachedAudit } from "@/lib/cache";
 
 export async function GET() {
   return NextResponse.json({
@@ -86,6 +87,12 @@ export async function POST(req: NextRequest) {
     let modelInput: MultimodalInput = "";
 
     if (uploadedFile) {
+      if (uploadedFile.size > 20 * 1024 * 1024) {
+        return NextResponse.json(
+          { error: "File exceeds 20 MB limit. Please upload a smaller file." },
+          { status: 413 }
+        );
+      }
       const arrayBuffer = await uploadedFile.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       const mimeType = resolveMimeType(uploadedFile.name, uploadedFile.type);
@@ -171,6 +178,14 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+      const cacheKey = buildContractCacheKey(contractText);
+      const cached = getCachedAudit(cacheKey);
+      if (cached) {
+        return NextResponse.json(
+          { ...cached, pipelineMs: Date.now() - startedAt },
+          { headers: { "X-Cache": "HIT" } }
+        );
+      }
       modelInput = `Audit this agreement and return ONLY valid JSON:\n\n---\n${contractText.slice(0, 24000)}\n---`;
     }
 
@@ -218,20 +233,45 @@ export async function POST(req: NextRequest) {
       .replace(/\s*```$/i, "")
       .trim();
 
-    const parsed = JSON.parse(cleanedJson) as Omit<
-      ContractAnalysis,
-      "analysisMode" | "pipelineMs" | "analyzedAt"
+    const parsed = JSON.parse(cleanedJson) as Partial<
+      Omit<ContractAnalysis, "analysisMode" | "pipelineMs" | "analyzedAt">
     >;
 
+    const clampScore = (val: unknown, fallback = 50) =>
+      typeof val === "number" && Number.isFinite(val)
+        ? Math.max(0, Math.min(100, Math.round(val)))
+        : fallback;
+
     const result: ContractAnalysis = {
-      ...parsed,
+      contractTitle: parsed.contractTitle || "Contract Risk Audit",
+      category: parsed.category || "General Agreement",
+      safetyScore: clampScore(parsed.safetyScore, 50),
+      verdict: parsed.verdict || "NEGOTIATE BEFORE SIGNING",
+      executiveSummary: parsed.executiveSummary || "Audit completed.",
+      riskVectors: {
+        financialTrap: clampScore(parsed.riskVectors?.financialTrap, 0),
+        ipRightsGrab: clampScore(parsed.riskVectors?.ipRightsGrab, 0),
+        lockInPenalty: clampScore(parsed.riskVectors?.lockInPenalty, 0),
+        unilateralPower: clampScore(parsed.riskVectors?.unilateralPower, 0),
+      },
+      findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+      negotiation: {
+        subject: parsed.negotiation?.subject || "Requested Contract Clarifications",
+        tone: parsed.negotiation?.tone || "Polite & Collaborative",
+        emailBody: parsed.negotiation?.emailBody || "",
+        whatsappShort: parsed.negotiation?.whatsappShort || "",
+      },
       extractedText: parsed.extractedText || extractedText || undefined,
       analysisMode: "gemini-4-hydrogen",
       pipelineMs: Date.now() - startedAt,
       analyzedAt: new Date().toISOString(),
     };
 
-    return NextResponse.json(result);
+    if (!uploadedFile && contractText) {
+      setCachedAudit(buildContractCacheKey(contractText), result);
+    }
+
+    return NextResponse.json(result, { headers: { "X-Cache": "MISS" } });
   } catch (err) {
     console.error("Gemini Analyze error:", err);
     const message = err instanceof Error ? err.message : "Gemini API request failed.";

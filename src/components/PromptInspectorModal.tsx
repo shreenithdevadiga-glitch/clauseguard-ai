@@ -13,15 +13,24 @@ export function PromptInspectorModal({ open, onClose }: PromptInspectorModalProp
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-slate-700/80 bg-[#0B1120] shadow-2xl overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="prompt-pipeline-title"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-slate-700/80 bg-[#0B1120] shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-amber-500/15 text-amber-400">
-              <Cpu className="w-5 h-5" />
+              <Cpu className="w-5 h-5" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">
+              <h2 id="prompt-pipeline-title" className="text-base font-bold text-white">
                 3-Stage Adversarial Prompt Pipeline
               </h2>
               <p className="text-xs text-slate-400">
