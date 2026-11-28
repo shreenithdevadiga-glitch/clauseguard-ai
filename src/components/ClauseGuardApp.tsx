@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { SAMPLE_CONTRACTS } from "@/lib/samples";
+import { runDemoOrHeuristicAnalysis } from "@/lib/heuristic-engine";
+import { buildDemoChatReply } from "@/lib/gemini";
 import { ContractAnalysis, ClauseFinding } from "@/lib/types";
 import { SafetyGauge } from "./SafetyGauge";
 import { AnnotatedContract, UploadedFileMeta } from "./AnnotatedContract";
@@ -51,7 +53,7 @@ export function ClauseGuardApp() {
   const [uploadedFile, setUploadedFile] = useState<UploadedFileMeta | null>(null);
   const [analysis, setAnalysis] = useState<ContractAnalysis | null>(null);
   const [history, setHistory] = useState<AuditHistoryItem[]>([]);
-  const [serverLiveConfigured, setServerLiveConfigured] = useState<boolean>(true);
+  const [serverLiveConfigured, setServerLiveConfigured] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<"edit" | "xray">("xray");
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("audit");
@@ -71,6 +73,32 @@ export function ClauseGuardApp() {
   const [qaHistory, setQaHistory] = useState<{ q: string; a: string; mode?: string }[]>([]);
   const [isAsking, setIsAsking] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+
+  const activeFindingRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node) {
+        node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeFindingId],
+  );
+
+  const revokePreviewUrl = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+  };
+
+  const applyCompletedAudit = (text: string, typed: ContractAnalysis) => {
+    setAnalysis(typed);
+    pushHistory(text, typed);
+    setActiveFindingId(typed.findings?.[0]?.id ?? null);
+    setViewMode("xray");
+    setRightTab("audit");
+  };
 
   const pushHistory = (text: string, res: ContractAnalysis) => {
     setHistory((prev) => {
@@ -85,12 +113,21 @@ export function ClauseGuardApp() {
     });
   };
 
-  const runLiveAudit = async (textToAudit: string) => {
+  const runLiveAudit = async (textToAudit: string, liveOverride?: boolean) => {
     if (textToAudit.trim().length < 30) {
       setErrorMsg("Please paste at least 30 characters of contract text.");
       return;
     }
+
     abortRef.current?.abort();
+    const useLiveApi = liveOverride ?? (serverLiveConfigured || Boolean(apiKey.trim()));
+    if (!useLiveApi) {
+      setErrorMsg(null);
+      const demoResult = runDemoOrHeuristicAnalysis(textToAudit);
+      applyCompletedAudit(textToAudit, demoResult);
+      return;
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
     const timeoutId = setTimeout(() => controller.abort(), 35000);
@@ -116,12 +153,7 @@ export function ClauseGuardApp() {
       if (!res.ok) {
         throw new Error(data.error || "Live Gemini audit failed");
       }
-      const typed = data as ContractAnalysis;
-      setAnalysis(typed);
-      pushHistory(textToAudit, typed);
-      setActiveFindingId(typed.findings?.[0]?.id ?? null);
-      setViewMode("xray");
-      setRightTab("audit");
+      applyCompletedAudit(textToAudit, data as ContractAnalysis);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         // Only show timeout error if this controller is still the active one
@@ -144,16 +176,6 @@ export function ClauseGuardApp() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/analyze")
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setServerLiveConfigured(Boolean(d?.liveConfigured));
-      })
-      .catch(() => {});
-
-    const timer = setTimeout(() => {
-      if (!cancelled) void runLiveAudit(initialSample.text);
-    }, 0);
 
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -163,24 +185,44 @@ export function ClauseGuardApp() {
     };
     window.addEventListener("keydown", onKeyDown);
 
+    fetch("/api/analyze")
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const live = Boolean(d?.liveConfigured);
+        setServerLiveConfigured(live);
+        void runLiveAudit(initialSample.text, live);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerLiveConfigured(false);
+        void runLiveAudit(initialSample.text, false);
+      });
+
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      abortRef.current?.abort();
+      revokePreviewUrl();
       window.removeEventListener("keydown", onKeyDown);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCopy = async (id: string, value: string) => {
-    await navigator.clipboard.writeText(value);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1800);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setErrorMsg("Clipboard access was blocked by the browser.");
+    }
   };
 
   const handleSelectSample = (sampleId: string) => {
     const found = SAMPLE_CONTRACTS.find((s) => s.id === sampleId);
     if (!found) return;
     setSelectedSampleId(found.id);
+    revokePreviewUrl();
     setUploadedFile(null);
     setContractText(found.text);
     setQaHistory([]);
@@ -192,11 +234,15 @@ export function ClauseGuardApp() {
     setErrorMsg(null);
     setSelectedSampleId("");
     setQaHistory([]);
+    revokePreviewUrl();
 
     const previewUrl =
       file.type.startsWith("image/") || file.type.startsWith("video/")
         ? URL.createObjectURL(file)
         : undefined;
+    if (previewUrl) {
+      previewUrlRef.current = previewUrl;
+    }
 
     setUploadedFile({
       name: file.name,
@@ -204,6 +250,32 @@ export function ClauseGuardApp() {
       size: file.size,
       previewUrl,
     });
+
+    const useLiveApi = serverLiveConfigured || Boolean(apiKey.trim());
+    if (!useLiveApi) {
+      const lower = file.name.toLowerCase();
+      const isPlainText =
+        file.type.startsWith("text/") || /\.(txt|md|csv|json|xml|html)$/.test(lower);
+      if (isPlainText) {
+        const text = (await file.text()).trim();
+        if (text.length < 30) {
+          setErrorMsg("Uploaded text file must contain at least 30 characters.");
+          return;
+        }
+        setContractText(text);
+        applyCompletedAudit(text, runDemoOrHeuristicAnalysis(text));
+      } else {
+        setErrorMsg(
+          "Demo Mode supports text/CSV/Markdown files locally. Add a Gemini API key (top bar) for PDF, DOCX, image, audio, or video audits."
+        );
+      }
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
 
     setIsAnalyzing(true);
     setPipelineStage(1);
@@ -219,6 +291,7 @@ export function ClauseGuardApp() {
 
       const res = await fetch("/api/analyze", {
         method: "POST",
+        signal: controller.signal,
         body: formData,
       });
       const data = await res.json();
@@ -228,18 +301,23 @@ export function ClauseGuardApp() {
       const typed = data as ContractAnalysis;
       const finalText = typed.extractedText || `[Analyzed multimodal file: ${file.name}]`;
       setContractText(finalText);
-      setAnalysis(typed);
-      pushHistory(finalText, typed);
-      setActiveFindingId(typed.findings?.[0]?.id ?? null);
-      setViewMode("xray");
-      setRightTab("audit");
+      applyCompletedAudit(finalText, typed);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "File analysis failed.");
+      if (err instanceof Error && err.name === "AbortError") {
+        if (abortRef.current === controller) {
+          setErrorMsg("File analysis timed out or was cancelled. Please try again.");
+        }
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : "File analysis failed.");
+      }
     } finally {
+      clearTimeout(timeoutId);
       clearTimeout(t1);
       clearTimeout(t2);
-      setPipelineStage(0);
-      setIsAnalyzing(false);
+      if (abortRef.current === controller) {
+        setPipelineStage(0);
+        setIsAnalyzing(false);
+      }
     }
   };
 
@@ -251,8 +329,16 @@ export function ClauseGuardApp() {
     e.preventDefault();
     const q = qaQuestion.trim();
     if (!q || isAsking) return;
-    setIsAsking(true);
     setQaQuestion("");
+
+    const useLiveApi = serverLiveConfigured || Boolean(apiKey.trim());
+    if (!useLiveApi) {
+      const answer = buildDemoChatReply(q, analysis);
+      setQaHistory((prev) => [...prev, { q, a: answer, mode: "demo-engine" }]);
+      return;
+    }
+
+    setIsAsking(true);
 
     try {
       const res = await fetch("/api/chat", {
@@ -361,12 +447,13 @@ export function ClauseGuardApp() {
             <button
               type="button"
               onClick={() => setShowCmdPalette(true)}
-              className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition"
-              title="Open Command Palette"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition"
+              title="Open Command Palette (Ctrl+K)"
+              aria-label="Quick Actions — Ctrl+K"
             >
               <Command className="w-3.5 h-3.5 text-slate-400" />
-              <span>Quick Actions</span>
-              <kbd className="ml-1 px-1.5 py-0.2 rounded bg-black/40 text-[10px] font-mono text-slate-400 border border-white/10">
+              <span className="hidden sm:inline">Quick Actions</span>
+              <kbd className="hidden md:inline ml-1 px-1.5 py-0.2 rounded bg-black/40 text-[10px] font-mono text-slate-400 border border-white/10">
                 Ctrl+K
               </kbd>
             </button>
@@ -375,13 +462,13 @@ export function ClauseGuardApp() {
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border ${
                 apiKey.trim() || serverLiveConfigured || analysis?.analysisMode === "gemini-4-hydrogen"
                   ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
-                  : "bg-rose-500/10 text-rose-300 border-rose-500/30"
+                  : "bg-amber-500/10 text-amber-300 border-amber-500/30"
               }`}
             >
               <Sparkles className="w-3.5 h-3.5" />
               {apiKey.trim() || serverLiveConfigured || analysis?.analysisMode === "gemini-4-hydrogen"
                 ? "Live Gemini 4 Hydrogen"
-                : "API Key Required"}
+                : "Demo Mode (Heuristic)"}
             </span>
 
             <button
@@ -571,7 +658,10 @@ export function ClauseGuardApp() {
             }}
             onUploadFile={handleUploadFile}
             uploadedFile={uploadedFile}
-            onClearFile={() => setUploadedFile(null)}
+            onClearFile={() => {
+              revokePreviewUrl();
+              setUploadedFile(null);
+            }}
             findings={analysis?.findings ?? []}
             activeFindingId={activeFindingId}
             onSelectFinding={(id) => {
@@ -686,6 +776,7 @@ export function ClauseGuardApp() {
                       return (
                         <div
                           key={f.id}
+                          ref={isActive ? activeFindingRef : undefined}
                           onClick={() => setActiveFindingId(f.id)}
                           className={`rounded-2xl border p-4 space-y-3 transition cursor-pointer backdrop-blur-md ${
                             isActive

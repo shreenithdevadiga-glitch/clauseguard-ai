@@ -48,7 +48,7 @@ Instead of generic summarization, ClauseGuard AI uses a **3-Stage Adversarial Pr
 ```bash
 npm install
 cp .env.example .env.local   # Add your GEMINI_API_KEY
-npm test                     # Runs 7 automated tests (node --test tests/clauseguard.test.mjs)
+npm test                     # Runs 17 automated tests (node --test tests/*.test.mjs)
 npm run lint                 # Runs ESLint
 npm run build                # Builds production Next.js bundle
 npm run dev                  # Starts locally on http://localhost:3000

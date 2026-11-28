@@ -259,11 +259,19 @@ export function AnnotatedContract({
             return (
               <mark
                 key={i}
+                tabIndex={0}
+                role="button"
                 onClick={() => onSelectFinding(seg.finding!.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectFinding(seg.finding!.id);
+                  }
+                }}
                 title={`${seg.finding.severity}: ${seg.finding.title} (Click to inspect)`}
                 className={`cursor-pointer rounded px-1 py-0.5 transition ${sevStyles} ${
                   isActive ? "ring-2 ring-white/80" : ""
-                }`}
+                } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400`}
               >
                 {seg.text}
                 <span className="ml-1.5 inline-block text-[10px] font-sans font-bold uppercase px-1.5 py-0.2 rounded bg-slate-950/90 text-white align-middle">

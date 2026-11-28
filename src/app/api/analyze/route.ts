@@ -4,6 +4,13 @@ import mammoth from "mammoth";
 import { UNIFIED_AUDIT_SYSTEM_PROMPT } from "@/lib/prompts";
 import { ContractAnalysis } from "@/lib/types";
 import { buildContractCacheKey, getCachedAudit, setCachedAudit } from "@/lib/cache";
+import {
+  clampScore,
+  InvalidAuditResponseError,
+  parseAndValidateAuditResponse,
+  runGeminiInteraction,
+  safeReadJsonBody,
+} from "@/lib/gemini";
 
 export async function GET() {
   return NextResponse.json({
@@ -58,9 +65,18 @@ export async function POST(req: NextRequest) {
         userApiKey = keyEntry.trim();
       }
     } else {
-      const body = await req.json();
-      contractText = typeof body?.contractText === "string" ? body.contractText.trim() : "";
-      userApiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+      const bodyResult = await safeReadJsonBody(req);
+      if (!bodyResult.ok) {
+        return bodyResult.response;
+      }
+      contractText =
+        typeof bodyResult.data.contractText === "string"
+          ? bodyResult.data.contractText.trim()
+          : "";
+      userApiKey =
+        typeof bodyResult.data.apiKey === "string"
+          ? bodyResult.data.apiKey.trim()
+          : "";
     }
 
     const apiKey = userApiKey || process.env.GEMINI_API_KEY?.trim() || "";
@@ -189,37 +205,11 @@ export async function POST(req: NextRequest) {
       modelInput = `Audit this agreement and return ONLY valid JSON:\n\n---\n${contractText.slice(0, 24000)}\n---`;
     }
 
-    const LIVE_MODELS = ["gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"] as const;
-    let interaction: Awaited<ReturnType<typeof client.interactions.create>> | null = null;
-    let lastError: unknown = null;
+    const { outputText: rawText } = await runGeminiInteraction(client, {
+      system_instruction: UNIFIED_AUDIT_SYSTEM_PROMPT,
+      input: modelInput,
+    });
 
-    for (const modelName of LIVE_MODELS) {
-      try {
-        interaction = await client.interactions.create(
-          {
-            model: modelName,
-            system_instruction: UNIFIED_AUDIT_SYSTEM_PROMPT,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            input: modelInput as any,
-            store: false,
-          },
-          { signal: AbortSignal.timeout(20000) }
-        );
-        break;
-      } catch (err) {
-        lastError = err;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!/503|429|high demand|timed out|timeout|aborted/i.test(msg)) {
-          throw err;
-        }
-      }
-    }
-
-    if (!interaction) {
-      throw lastError ?? new Error("All live Gemini models failed.");
-    }
-
-    const rawText = interaction.output_text?.trim() || "";
     if (!rawText) {
       return NextResponse.json(
         { error: "Gemini returned an empty response. Please try again." },
@@ -227,41 +217,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const cleanedJson = rawText
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-
-    const parsed = JSON.parse(cleanedJson) as Partial<
-      Omit<ContractAnalysis, "analysisMode" | "pipelineMs" | "analyzedAt">
-    >;
-
-    const clampScore = (val: unknown, fallback = 50) =>
-      typeof val === "number" && Number.isFinite(val)
-        ? Math.max(0, Math.min(100, Math.round(val)))
-        : fallback;
+    const validated = parseAndValidateAuditResponse(rawText, extractedText);
 
     const result: ContractAnalysis = {
-      contractTitle: parsed.contractTitle || "Contract Risk Audit",
-      category: parsed.category || "General Agreement",
-      safetyScore: clampScore(parsed.safetyScore, 50),
-      verdict: parsed.verdict || "NEGOTIATE BEFORE SIGNING",
-      executiveSummary: parsed.executiveSummary || "Audit completed.",
-      riskVectors: {
-        financialTrap: clampScore(parsed.riskVectors?.financialTrap, 0),
-        ipRightsGrab: clampScore(parsed.riskVectors?.ipRightsGrab, 0),
-        lockInPenalty: clampScore(parsed.riskVectors?.lockInPenalty, 0),
-        unilateralPower: clampScore(parsed.riskVectors?.unilateralPower, 0),
-      },
-      findings: Array.isArray(parsed.findings) ? parsed.findings : [],
-      negotiation: {
-        subject: parsed.negotiation?.subject || "Requested Contract Clarifications",
-        tone: parsed.negotiation?.tone || "Polite & Collaborative",
-        emailBody: parsed.negotiation?.emailBody || "",
-        whatsappShort: parsed.negotiation?.whatsappShort || "",
-      },
-      extractedText: parsed.extractedText || extractedText || undefined,
+      ...validated,
+      safetyScore: clampScore(validated.safetyScore, 50),
       analysisMode: "gemini-4-hydrogen",
       pipelineMs: Date.now() - startedAt,
       analyzedAt: new Date().toISOString(),
@@ -273,10 +233,15 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(result, { headers: { "X-Cache": "MISS" } });
   } catch (err) {
+    if (err instanceof InvalidAuditResponseError) {
+      return NextResponse.json(
+        { error: "Gemini returned an invalid audit payload. Please try again." },
+        { status: 502 }
+      );
+    }
     console.error("Gemini Analyze error:", err);
-    const message = err instanceof Error ? err.message : "Gemini API request failed.";
     return NextResponse.json(
-      { error: `Live Gemini 4 Hydrogen audit failed: ${message}` },
+      { error: "Live Gemini audit failed. Please verify your API key and try again." },
       { status: 500 }
     );
   }

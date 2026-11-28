@@ -28,6 +28,8 @@ export function getCachedAudit(key: string): ContractAnalysis | null {
     auditCache.delete(key);
     return null;
   }
+  auditCache.delete(key);
+  auditCache.set(key, entry);
   return entry.value;
 }
 
@@ -35,7 +37,9 @@ export function getCachedAudit(key: string): ContractAnalysis | null {
  * Stores a contract analysis in an in-memory bounded LRU cache.
  */
 export function setCachedAudit(key: string, value: ContractAnalysis): void {
-  if (auditCache.size >= MAX_CACHE_ENTRIES) {
+  if (auditCache.has(key)) {
+    auditCache.delete(key);
+  } else if (auditCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = auditCache.keys().next().value;
     if (oldestKey) auditCache.delete(oldestKey);
   }
